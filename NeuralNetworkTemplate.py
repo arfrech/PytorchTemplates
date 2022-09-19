@@ -6,7 +6,7 @@
 
 import torch, numpy, pandas
 class NeuralNetwork(torch.nn.Module):
-
+    
     def __init__(self,in_features,out_features,model_type='Classifier',*,epochs=150,hidden_size=[64,16,64],
                  dropout=0.0,optimizerAlgo='Adam',learning_rate=0.01,lambdaL2=0,batchsize=None,
                  shuffle=True,drop_last=True,doBN=False,verbose=True,random_state=None):
@@ -32,6 +32,7 @@ class NeuralNetwork(torch.nn.Module):
         self.random_state = random_state
         if type(self.random_state) == int:
             torch.manual_seed(self.random_state)
+        self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu') 
         self.in_features = in_features
         self.out_features = out_features
         self.learning_rate = learning_rate
@@ -68,15 +69,15 @@ class NeuralNetwork(torch.nn.Module):
             torch.manual_seed(self.random_state)
         for name,layer in self.model.items():
             if name == 'input':
-                x = torch.nn.functional.relu(layer(x)) # x passa pelo input
+                x = torch.nn.functional.relu(layer(x)).to(self.device) # x passa pelo input
             elif 'BatchNorm1d' in name:
-                x = layer(x) # x passa pelo batch norm
+                x = layer(x).to(self.device) # x passa pelo batch norm
             else:
-                x = layer(x) # x passa pela hidden layer
-                x = torch.nn.functional.relu(x) # x passa pela ReLU
-                x = torch.nn.functional.dropout(x,p=self.dropout) # dropout na hidden layer
+                x = layer(x).to(self.device) # x passa pela hidden layer
+                x = torch.nn.functional.relu(x).to(self.device) # x passa pela ReLU
+                x = torch.nn.functional.dropout(x,p=self.dropout).to(self.device) # dropout na hidden layer
         
-        output = self.output(x) # x passa pelo output se e termina
+        output = self.output(x).to(self.device) # x passa pelo output se e termina
         return output
     
     def optimizer(self):
@@ -95,7 +96,7 @@ class NeuralNetwork(torch.nn.Module):
             else:
                 criterion = torch.nn.BCEWithLogitsLoss()
         elif self.model_type == 'Regressor':
-            criterion = torch.nn.MSELoss()
+            criterion = torch.nn.HuberLoss()
         return criterion
     
     def fit(self,X_train,y_train):
@@ -126,7 +127,7 @@ class NeuralNetwork(torch.nn.Module):
         if self.batchsize == None:
             self.batchsize = len(X_train)
         
-        train_data = torch.utils.data.TensorDataset(X_train_tensor,y_train_tensor)
+        train_data = torch.utils.data.TensorDataset(X_train_tensor,y_train_tensor).to(self.device)
         train_loader = torch.utils.data.DataLoader(train_data,batch_size=self.batchsize,shuffle=self.shuffle,drop_last=self.drop_last)
         
         criterion = self.criterion()
@@ -160,7 +161,7 @@ class NeuralNetwork(torch.nn.Module):
         preds = []
         self.model.eval()
         with torch.no_grad():
-            for i,data in enumerate(torch.FloatTensor(X)):
+            for i,data in enumerate(torch.FloatTensor(X).to(self.device)):
                 y_val = self.forward(data.unsqueeze(0))
                 if self.model_type == 'Classifier':
                     preds.append(y_val.argmax().item())
@@ -183,6 +184,7 @@ class NeuralNetwork(torch.nn.Module):
             metric = mean_absolute_percentage_error(y_true,self.predict(self.X))
         
         return metric
+
 class LSTM(torch.nn.Module):
     
     def __init__(self,input_size=4,output_size=1,*,epochs=50,hidden_size=128,fc_size=[128,64,16],
@@ -193,6 +195,7 @@ class LSTM(torch.nn.Module):
         self.random_state = random_state
         if type(self.random_state) == int:
             torch.manual_seed(self.random_state)
+        self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu') 
         self.output_size = output_size 
         self.optimizerAlgo = optimizerAlgo
         self.learning_rate = learning_rate
@@ -209,6 +212,7 @@ class LSTM(torch.nn.Module):
                                            hidden_size=self.hidden_size,
                                            num_layers=self.num_layers,
                                            batch_first=True,
+                                           bidirectional=False,
                                            dropout=self.dropout)
         x = self.hidden_size
         for i in numpy.arange(len(self.fc_size)):
@@ -221,17 +225,17 @@ class LSTM(torch.nn.Module):
         if type(self.random_state) == int:
             torch.manual_seed(self.random_state)
         
-        h_0 = torch.randn(self.num_layers,x.size(0),self.hidden_size) # hidden state
-        c_0 = torch.randn(self.num_layers,x.size(0),self.hidden_size) # cell state
+        h_0 = torch.randn(self.num_layers,x.size(0),self.hidden_size).to(self.device) # hidden state
+        c_0 = torch.randn(self.num_layers,x.size(0),self.hidden_size).to(self.device) # cell state
         
         for name,layer in self.model.items():
             if name == 'lstm':
                 lstm_output,(hn,cn) = layer(x,(h_0,c_0))
-                x = hn.view(-1, self.hidden_size)
-                x = torch.nn.functional.relu(x)
+                x = hn[-1].view(-1,self.hidden_size).to(self.device)
+                x = torch.nn.functional.relu(x).to(self.device)
             else:
-                x = torch.nn.functional.relu(layer(x))
-        output = self.output(x)
+                x = torch.nn.functional.relu(layer(x)).to(self.device)
+        output = self.output(x).to(self.device)
         return output
     
     def optimizer(self):
@@ -280,7 +284,7 @@ class LSTM(torch.nn.Module):
 
         time_y_tensor = torch.FloatTensor(numpy.array(time_series_data_y))
         
-        return time_x_tensor, time_y_tensor
+        return time_x_tensor.to(self.device), time_y_tensor.to(self.device)
 
     def fit(self,X_train,y_train,window_size_split=1):
         
