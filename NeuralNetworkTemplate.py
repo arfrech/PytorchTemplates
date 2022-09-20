@@ -181,7 +181,7 @@ class NeuralNetwork(torch.nn.Module):
             metric = accuracy_score(y_true,self.predict(self.X))
         elif self.model_type == 'Regressor':
             from sklearn.metrics import mean_absolute_percentage_error
-            metric = mean_absolute_percentage_error(y_true.cpu(),self.predict(self.X))
+            metric = mean_absolute_percentage_error(y_true,self.predict(self.X))
         
         return metric
 
