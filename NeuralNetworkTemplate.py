@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[ ]:
+# In[19]:
 
 
 import torch, numpy, pandas
@@ -69,15 +69,15 @@ class NeuralNetwork(torch.nn.Module):
             torch.manual_seed(self.random_state)
         for name,layer in self.model.items():
             if name == 'input':
-                x = torch.nn.functional.relu(layer(x)).to(self.device) # x passa pelo input
+                x = torch.nn.functional.relu(layer(x)) # x passa pelo input
             elif 'BatchNorm1d' in name:
-                x = layer(x).to(self.device) # x passa pelo batch norm
+                x = layer(x) # x passa pelo batch norm
             else:
-                x = layer(x).to(self.device) # x passa pela hidden layer
-                x = torch.nn.functional.relu(x).to(self.device) # x passa pela ReLU
-                x = torch.nn.functional.dropout(x,p=self.dropout).to(self.device) # dropout na hidden layer
+                x = layer(x) # x passa pela hidden layer
+                x = torch.nn.functional.relu(x) # x passa pela ReLU
+                x = torch.nn.functional.dropout(x,p=self.dropout) # dropout na hidden layer
         
-        output = self.output(x).to(self.device) # x passa pelo output se e termina
+        output = self.output(x) # x passa pelo output se e termina
         return output
     
     def optimizer(self):
@@ -127,7 +127,7 @@ class NeuralNetwork(torch.nn.Module):
         if self.batchsize == None:
             self.batchsize = len(X_train)
         
-        train_data = torch.utils.data.TensorDataset(X_train_tensor,y_train_tensor).to(self.device)
+        train_data = torch.utils.data.TensorDataset(X_train_tensor.to(self.device),y_train_tensor.to(self.device))
         train_loader = torch.utils.data.DataLoader(train_data,batch_size=self.batchsize,shuffle=self.shuffle,drop_last=self.drop_last)
         
         criterion = self.criterion()
@@ -144,7 +144,7 @@ class NeuralNetwork(torch.nn.Module):
                 loss.backward()
                 optimizer.step()
                 
-                batch_loss.append(loss.detach().numpy())
+                batch_loss.append(loss.cpu().detach().numpy())
             
             losses.append(numpy.mean(batch_loss))
             if self.verbose == True:
@@ -181,21 +181,22 @@ class NeuralNetwork(torch.nn.Module):
             metric = accuracy_score(y_true,self.predict(self.X))
         elif self.model_type == 'Regressor':
             from sklearn.metrics import mean_absolute_percentage_error
-            metric = mean_absolute_percentage_error(y_true,self.predict(self.X))
+            metric = mean_absolute_percentage_error(y_true.cpu(),self.predict(self.X))
         
         return metric
 
-class LSTM(torch.nn.Module):
+class RNN(torch.nn.Module):
     
     def __init__(self,input_size=4,output_size=1,*,epochs=50,hidden_size=128,fc_size=[128,64,16],
                  num_layers=1,dropout=0,optimizerAlgo='Adam',learning_rate=0.01,lambdaL2=0,
-                 verbose=True,random_state=None):
+                 verbose=True,random_state=None,model_type='RNN'): # 'RNN', 'GRU', 'LSTM'
         
         super().__init__()
         self.random_state = random_state
         if type(self.random_state) == int:
             torch.manual_seed(self.random_state)
-        self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu') 
+        self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+        self.model_type = model_type
         self.output_size = output_size 
         self.optimizerAlgo = optimizerAlgo
         self.learning_rate = learning_rate
@@ -208,18 +209,30 @@ class LSTM(torch.nn.Module):
         self.dropout = dropout
         self.verbose = verbose
         self.model = torch.nn.ModuleDict()
-        self.model['lstm'] = torch.nn.LSTM(input_size=self.input_size,
-                                           hidden_size=self.hidden_size,
-                                           num_layers=self.num_layers,
-                                           batch_first=True,
-                                           bidirectional=False,
-                                           dropout=self.dropout)
+        if self.model_type == 'GRU':
+            self.model['gru'] = torch.nn.GRU(input_size=self.input_size,
+                                             hidden_size=self.hidden_size,
+                                             num_layers=self.num_layers,
+                                             batch_first=True,
+                                             dropout=self.dropout)
+        elif self.model_type == 'LSTM':
+            self.model['lstm'] = torch.nn.LSTM(input_size=self.input_size,
+                                               hidden_size=self.hidden_size,
+                                               num_layers=self.num_layers,
+                                               batch_first=True,
+                                               dropout=self.dropout)
+        elif self.model_type == 'RNN':
+            self.model['rnn'] = torch.nn.RNN(input_size=self.input_size,
+                                             hidden_size=self.hidden_size,
+                                             num_layers=self.num_layers,
+                                             batch_first=True,
+                                             dropout=self.dropout)
         x = self.hidden_size
         for i in numpy.arange(len(self.fc_size)):
             n_nodes = self.fc_size[i]
-            self.model[f'fc_{i+1}'] = torch.nn.Linear(x,n_nodes)
+            self.model[f'fc_{i+1}'] = torch.nn.Linear(x,n_nodes).to(self.device)
             x = n_nodes
-        self.output = torch.nn.Linear(x,self.output_size)
+        self.output = torch.nn.Linear(x,self.output_size).to(self.device)
         
     def forward(self,x):
         if type(self.random_state) == int:
@@ -231,10 +244,15 @@ class LSTM(torch.nn.Module):
         for name,layer in self.model.items():
             if name == 'lstm':
                 lstm_output,(hn,cn) = layer(x,(h_0,c_0))
-                x = hn[-1].view(-1,self.hidden_size).to(self.device)
-                x = torch.nn.functional.relu(x).to(self.device)
+                x = lstm_output[:,-1,:]
+            elif name == 'gru':
+                gru_output,hn = layer(x,h_0)
+                x = gru_output[:,-1,:]
+            elif name == 'rnn':
+                rnn_output,hn = layer(x,h_0)
+                x = rnn_output[:,-1,:]
             else:
-                x = torch.nn.functional.relu(layer(x)).to(self.device)
+                x = torch.nn.functional.relu(layer(x))
         output = self.output(x).to(self.device)
         return output
     
@@ -250,10 +268,10 @@ class LSTM(torch.nn.Module):
         if type(self.random_state) == int:
             torch.manual_seed(self.random_state)
 
-        criterion = torch.nn.MSELoss()
+        criterion = torch.nn.HuberLoss()
         return criterion
     
-    def splitTimeSeries(self,X,y,window_size_split=1):
+    def splitTimeSeries(self,X,y,*,sequence_size=1,scaler_type='StandardScaler',test_size=None):
         if type(self.random_state) == int:
             torch.manual_seed(self.random_state)
         
@@ -261,50 +279,75 @@ class LSTM(torch.nn.Module):
             X = X.values
         
         if type(y) == pandas.core.frame.DataFrame or type(y) == pandas.core.series.Series:
-            y = y.values
-        
-        try:
-            y.shape[1]
-            y = y.flatten()
-        except:
-            pass
+            y = y.values.reshape(-1, 1)
             
-        time_series_data_x = []
-        time_series_data_y = []
-        time_series_len = len(y)
-        for i in range(time_series_len-window_size_split):
-            window = X[i:i+window_size_split]
-            time_series_data_x.append(window)
+        if test_size == None:
+            X_train = X.copy()
+            X_test = X.copy()
             
-            target = y[i+window_size_split:i+window_size_split+1]
-            time_series_data_y.append(target)
-        
-        time_x_tensor = torch.FloatTensor(numpy.array(time_series_data_x))
-        time_x_tensor = torch.reshape(time_x_tensor,(time_x_tensor.shape[0],window_size_split,time_x_tensor.shape[2]))
+            y_train = y.copy()
+            y_test = y.copy()
+            
+        else:
+            X_train = X[:-test_size]
+            X_test  = X[-(test_size+sequence_size):]
 
-        time_y_tensor = torch.FloatTensor(numpy.array(time_series_data_y))
+            y_train = y[:-test_size]
+            y_test  = y[-(test_size+sequence_size):]
         
-        return time_x_tensor.to(self.device), time_y_tensor.to(self.device)
+        def normalizaDados(train,test,scaler_type):
+            import sklearn.preprocessing
+            scaler = getattr(sklearn.preprocessing,scaler_type)().fit(train)
+            train = scaler.transform(train)
+            test = scaler.transform(test)
+            return train,test,scaler
+        
+        def criaSequencia(X,y,sequence_size):
+            seq_feats = []
+            seq_target = []
+            for i in range(len(y)-sequence_size):
+                feats_i = X[i:i+sequence_size]
+                seq_feats.append(feats_i)
 
-    def fit(self,X_train,y_train,window_size_split=1):
+                target_i = y[i+sequence_size:i+sequence_size+1]
+                seq_target.append(target_i)
+            return seq_feats,seq_target
         
+        def criaTensor(X,y,sequence_size):
+            X_tensor = torch.FloatTensor(numpy.array(X))
+            X_tensor = torch.reshape(X_tensor,(X_tensor.shape[0],sequence_size,X_tensor.shape[2]))
+            y_tensor = torch.FloatTensor(numpy.array(y))
+            return X_tensor.to(self.device), y_tensor.to(self.device)
+        
+        X_train,X_test,scaler_x = normalizaDados(X_train,X_test,scaler_type)
+        y_train,y_test,scaler_y = normalizaDados(y_train,y_test,scaler_type)
+        
+        X_train,y_train = criaSequencia(X_train,y_train.flatten(),sequence_size)
+        X_test,y_test = criaSequencia(X_test,y_test.flatten(),sequence_size)
+        
+        X_train_tensor,y_train_tensor = criaTensor(X_train,y_train,sequence_size)
+        X_test_tensor,y_test_tensor = criaTensor(X_test,y_test,sequence_size)
+        
+        self.scaler_x = scaler_x
+        self.scaler_y = scaler_y
+    
+        return X_train_tensor,X_test_tensor,y_train_tensor,y_test_tensor
+
+    def fit(self,X_train,y_train):
         if type(self.random_state) == int:
             torch.manual_seed(self.random_state)
         
-        if type(X_train) != torch.Tensor or type(y_train) != torch.Tensor:
-            X_train, y_train = self.splitTimeSeries(X=X_train,y=y_train,window_size_split=window_size_split)
-
         criterion = self.criterion()
         optimizer = self.optimizer()
         losses = []
         for epoch in range(self.epochs):
             self.model.train()
-            y_pred = self.forward(X_train)
-            loss = criterion(y_pred,y_train)
+            y_pred = self.forward(X_train.to(self.device))
+            loss = criterion(y_pred,y_train.to(self.device))
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-            losses.append(loss.detach().numpy())
+            losses.append(loss.cpu().detach().numpy())
             if self.verbose == True:
                 if epoch%50==0:
                     print(f'epoch {epoch} and loss is {loss}')
@@ -312,25 +355,26 @@ class LSTM(torch.nn.Module):
     def predict(self,X,y,window_size_split=1):
         if type(self.random_state) == int:
             torch.manual_seed(self.random_state)
-            
-        if type(X) != torch.Tensor or type(y) != torch.Tensor:
-            X, y = self.splitTimeSeries(X=X,y=y,window_size_split=window_size_split)
         
         self.X = X
         self.y = y
         self.model.eval()
         with torch.no_grad():
-            y_val = self.forward(X)
+            y_val = self.forward(X.to(self.device))
         
-        return numpy.array(y_val)
+        return self.scaler_y.inverse_transform(y_val.cpu().detach().numpy())
     
-    def metric(self):
+    def metric(self,metric_type='mse'):
         if type(self.random_state) == int:
             torch.manual_seed(self.random_state)
-            
-        from sklearn.metrics import mean_absolute_percentage_error
-        metric = mean_absolute_percentage_error(self.y.detach().numpy(),self.predict(self.X,self.y))
+                    
+        metric_dict = {'mape':'mean_absolute_percentage_error',
+                       'mse':'mean_squared_error',
+                       'mae':'mean_absolute_error'}
         
-        return metric
+        import sklearn.metrics
+        error = getattr(sklearn.metrics,metric_dict[metric_type])(self.y.cpu().detach().numpy(),
+                                                                  self.predict(self.X,self.y))
+        return error
 #End
 
